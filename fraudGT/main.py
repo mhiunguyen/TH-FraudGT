@@ -97,7 +97,10 @@ def run():
                      f"split_index={cfg.dataset.split_index}")
         logging.info(f"    Starting now: {datetime.datetime.now()}")
         # Set machine learning pipeline
-        loaders, dataset = create_loader(returnDataset=True)
+        # Training remains shuffled inside create_loader; validation and test
+        # are deterministic.  This is especially important when evaluation
+        # is configured to cover the complete split.
+        loaders, dataset = create_loader(shuffle=False, returnDataset=True)
         loggers = create_logger()
         model = create_model(dataset=dataset)
         if cfg.pretrained.dir:

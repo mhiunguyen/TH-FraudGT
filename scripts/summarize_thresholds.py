@@ -87,6 +87,7 @@ def main():
             'test_precision': test_record[f'precision{metric_suffix}'],
             'test_recall': test_record[f'recall{metric_suffix}'],
             'test_auc': test_record['auc'],
+            'test_ap': test_record.get('ap'),
             'test_accuracy_default_threshold': test_record['accuracy'],
         })
 
@@ -97,7 +98,8 @@ def main():
     frame.to_csv(args.output, index=False)
     print(frame.to_string(index=False))
     print('\nMean ± sample standard deviation')
-    for metric in ('test_f1', 'test_precision', 'test_recall', 'test_auc'):
+    for metric in ('test_f1', 'test_precision', 'test_recall', 'test_auc',
+                   'test_ap'):
         print(f'{metric}: {frame[metric].mean():.4f} ± {frame[metric].std(ddof=1):.4f}')
     print(f'\nCSV: {args.output.resolve()}')
 

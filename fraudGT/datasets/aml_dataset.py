@@ -38,6 +38,10 @@ def z_norm(data):
     std = torch.where(std == 0, torch.tensor(1, dtype=torch.float32).cpu(), std)
     return (data - data.mean(0).unsqueeze(0)) / std
 
+def z_norm_with_stats(data, mean, std):
+    """Normalize with statistics fitted on training transactions only."""
+    return (data - mean) / std
+
 def format_dataset(inPath):
     r'''
     Turn text attributed dataset into a dataset only contains numbers.
@@ -383,6 +387,16 @@ class AMLDataset(TemporalDataset):
         e_val = torch.cat([train_inds, val_inds])
         e_test = torch.cat([train_inds, val_inds, test_inds])
 
+        # Fit preprocessing statistics on train only.  Reusing these values
+        # for validation/test prevents evaluation-distribution leakage.
+        edge_train = edge_attr[train_inds]
+        edge_mean = edge_train.mean(0, keepdim=True)
+        edge_std = edge_train.std(0, keepdim=True)
+        edge_std = torch.where(
+            edge_std == 0, torch.ones_like(edge_std), edge_std)
+        print(f'Edge train means: {edge_mean.squeeze(0).tolist()}')
+        print(f'Edge train stds: {edge_std.squeeze(0).tolist()}')
+
         history_features = None
         if self.add_history:
             print('Computing strictly past-only historical behavior features...')
@@ -414,7 +428,8 @@ class AMLDataset(TemporalDataset):
             e_mask = eval(f'e_{split}')
 
             masked_edge_index = edge_index[:, e_mask]
-            masked_edge_attr = z_norm(edge_attr[e_mask])
+            masked_edge_attr = z_norm_with_stats(
+                edge_attr[e_mask], edge_mean, edge_std)
             if history_features is not None:
                 masked_edge_attr = torch.cat(
                     [masked_edge_attr, history_features[e_mask]], dim=1)

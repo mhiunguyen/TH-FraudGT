@@ -8,7 +8,7 @@ import torch
 from scipy.stats import stats
 from sklearn.metrics import accuracy_score, precision_score, recall_score, \
     f1_score, roc_auc_score, mean_absolute_error, mean_squared_error, \
-    confusion_matrix
+    confusion_matrix, average_precision_score
 from sklearn.metrics import r2_score
 from fraudGT.graphgym.config import cfg
 from fraudGT.graphgym.logger import infer_task, Logger
@@ -158,6 +158,10 @@ class CustomLogger(Logger):
             'macro-f1': reformat(f1_score(true, pred_int, average='macro')),
             'micro-f1': reformat(f1_score(true, pred_int, average='micro')),
             'auc': reformat(auroc_score),
+            # PR-AUC (average precision) is more informative than accuracy or
+            # ROC-AUC for AML, where the positive class is extremely rare.
+            'ap': reformat(average_precision_score(
+                true.cpu().numpy(), pred_score.cpu().numpy())),
         }
         # The custom training loop uses this logger (not graphgym/logger.py).
         # Log several operating points so an epoch/threshold can be selected
