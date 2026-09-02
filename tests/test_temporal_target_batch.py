@@ -30,6 +30,7 @@ def make_batch(existing_eid=0):
     batch = HeteroData()
     batch['node'].x = torch.ones(3, 1)
     batch['node'].num_nodes = 3
+    batch['node'].batch = torch.zeros(3, dtype=torch.long)
     for edge_type, index in [
             (TASK, torch.tensor([[0], [1]])),
             (REVERSE, torch.tensor([[1], [0]]))]:
@@ -42,6 +43,27 @@ def make_batch(existing_eid=0):
     batch[TASK].edge_label_index = torch.tensor([[1], [2]])
     batch[TASK].edge_label = torch.tensor([1])
     batch[TASK].input_id = torch.tensor([0])
+    return batch
+
+
+def make_two_component_batch():
+    """Target 1 is valid history for later target 2, not leakage."""
+    batch = HeteroData()
+    batch['node'].x = torch.ones(6, 1)
+    batch['node'].num_nodes = 6
+    batch['node'].batch = torch.tensor([0, 0, 0, 1, 1, 1])
+    for edge_type, index in [
+            (TASK, torch.tensor([[0, 3], [1, 4]])),
+            (REVERSE, torch.tensor([[1, 4], [0, 3]]))]:
+        batch[edge_type].edge_index = index
+        batch[edge_type].edge_attr = torch.zeros(2, 2)
+        batch[edge_type].e_id = torch.tensor([0, 1])
+        batch[edge_type].timestamps = torch.tensor([1, 2])
+        batch[edge_type].temporal_timestamps = torch.tensor([1, 2])
+    batch[TASK].y = torch.tensor([0, 1])
+    batch[TASK].edge_label_index = torch.tensor([[1, 4], [2, 5]])
+    batch[TASK].edge_label = torch.tensor([1, 0])
+    batch[TASK].input_id = torch.tensor([0, 1])
     return batch
 
 
@@ -68,3 +90,16 @@ def test_target_already_in_history_is_rejected():
         add_ego_id=False)
     with pytest.raises(RuntimeError, match='Temporal leakage'):
         transform(make_batch(existing_eid=1))
+
+
+def test_earlier_target_can_be_history_of_later_component():
+    source = make_source()
+    transform = PrepareTemporalLinkBatch(
+        source, TASK, target_edge_ids=torch.tensor([1, 2]),
+        add_ego_id=False)
+    batch = transform(make_two_component_batch())
+
+    assert batch[TASK].target_edge_mask.tolist() == [
+        False, False, True, True]
+    assert batch[TASK].e_id.tolist() == [0, 1, 1, 2]
+    assert batch[TASK].y[batch[TASK].target_edge_mask].tolist() == [1, 0]

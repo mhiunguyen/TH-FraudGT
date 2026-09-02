@@ -834,12 +834,49 @@ class PrepareTemporalLinkBatch(BaseTransform):
                 'Temporal supervision mismatch: edge_label and input_id have '
                 'different lengths.')
 
-        # Strict-past sampling must not already contain the current edge.
-        if hasattr(task_store, 'e_id') and \
-                torch.isin(task_store.e_id, target_eids).any():
+        # In a disjoint batch, an earlier target may legitimately appear in
+        # the history of a later target.  Check leakage per sampled component,
+        # rather than comparing against the union of all target edge IDs.
+        node_batch = batch[self.task[0]].batch
+        source_groups = node_batch[target_index[0]]
+        destination_groups = node_batch[target_index[1]]
+        if not torch.equal(source_groups, destination_groups):
             raise RuntimeError(
-                'Temporal leakage: a current target edge is already present '
-                'in the strict-past sampled history.')
+                'Temporal target endpoints belong to different components.')
+        if source_groups.unique().numel() != target_eids.numel():
+            raise RuntimeError(
+                'Temporal batch must contain one disjoint component per '
+                'target edge.')
+
+        group_count = int(node_batch.max()) + 1
+        target_eid_by_group = torch.full(
+            (group_count,), -1, dtype=target_eids.dtype,
+            device=target_eids.device)
+        target_eid_by_group[source_groups] = target_eids
+
+        if hasattr(task_store, 'e_id') and task_store.e_id.numel() > 0:
+            history_groups = node_batch[task_store.edge_index[0]]
+            own_target_in_history = task_store.e_id == \
+                target_eid_by_group[history_groups]
+            if own_target_in_history.any():
+                raise RuntimeError(
+                    'Temporal leakage: a current target edge is present in '
+                    'its own strict-past sampled component.')
+
+            source = self.data[self.task]
+            if hasattr(source, 'temporal_timestamps') and \
+                    hasattr(task_store, 'temporal_timestamps'):
+                target_time_by_group = torch.full(
+                    (group_count,), torch.iinfo(torch.long).min,
+                    dtype=torch.long, device=target_eids.device)
+                target_time_by_group[source_groups] = \
+                    source.temporal_timestamps[target_eids]
+                invalid_time = task_store.temporal_timestamps >= \
+                    target_time_by_group[history_groups]
+                if invalid_time.any():
+                    raise RuntimeError(
+                        'Temporal leakage: sampled history contains an edge '
+                        'at or after its component target time.')
 
         for edge_type in batch.edge_types:
             store = batch[edge_type]
