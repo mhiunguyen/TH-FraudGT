@@ -3,6 +3,7 @@ import torch
 from torch_geometric.data import HeteroData
 
 from fraudGT.sampler.custom_sampler import PrepareTemporalLinkBatch
+from fraudGT.head.hetero_edge import ordered_edge_positions
 
 
 TASK = ('node', 'to', 'node')
@@ -103,3 +104,17 @@ def test_earlier_target_can_be_history_of_later_component():
         False, False, True, True]
     assert batch[TASK].e_id.tolist() == [0, 1, 1, 2]
     assert batch[TASK].y[batch[TASK].target_edge_mask].tolist() == [1, 0]
+
+
+def test_noncausal_targets_are_restored_to_input_order():
+    sampled_eids = torch.tensor([9, 3, 7, 4])
+    target_eids = torch.tensor([7, 9, 3])
+    positions = ordered_edge_positions(sampled_eids, target_eids)
+    assert positions.tolist() == [2, 0, 1]
+    assert sampled_eids[positions].tolist() == target_eids.tolist()
+
+
+def test_missing_noncausal_target_is_rejected():
+    with pytest.raises(RuntimeError, match='missing'):
+        ordered_edge_positions(
+            torch.tensor([1, 2, 3]), torch.tensor([2, 8]))

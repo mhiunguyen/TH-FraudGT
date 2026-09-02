@@ -9,6 +9,30 @@ from fraudGT.graphgym.config import cfg
 from fraudGT.graphgym.models.layer import MLP
 
 
+def ordered_edge_positions(sampled_eids, target_eids):
+    """Map target edge IDs to sampled-edge positions in target order."""
+    if target_eids.numel() == 0:
+        raise RuntimeError('Edge batch contains no supervision targets.')
+    if sampled_eids.numel() == 0:
+        raise RuntimeError('Sampled batch contains no edges.')
+
+    sorted_eids, permutation = torch.sort(sampled_eids)
+    locations = torch.searchsorted(sorted_eids, target_eids)
+    in_range = locations < sorted_eids.numel()
+    safe_locations = locations.clamp(max=sorted_eids.numel() - 1)
+    matched = in_range & (sorted_eids[safe_locations] == target_eids)
+    if not matched.all():
+        missing = target_eids[~matched][:10].detach().cpu().tolist()
+        raise RuntimeError(
+            'Target edge IDs are missing from the sampled batch: '
+            f'{missing}.')
+
+    positions = permutation[safe_locations]
+    if positions.unique().numel() != target_eids.numel():
+        raise RuntimeError('Target edge IDs do not map one-to-one to edges.')
+    return positions
+
+
 @register_head('hetero_edge')
 class HeteroGNNEdgeHead(nn.Module):
     '''Head of Hetero GNN, edge prediction'''
@@ -39,14 +63,17 @@ class HeteroGNNEdgeHead(nn.Module):
                 raise RuntimeError(
                     'Temporal target mask mismatch: '
                     f'expected {expected} targets, found {actual}.')
+            positions = mask_to_index(mask)
         else:
-            # There can be parallel edges between one node pair, so edge IDs
-            # are the safest key for the original non-temporal loader.
-            mask = torch.isin(
-                batch[task].e_id,
-                getattr(self, f'{batch.split}_inds')[batch[task].input_id])
+            # Preserve the input supervision order. A boolean ``isin`` mask
+            # returns sampled-adjacency order, which can differ from
+            # ``edge_label`` order and trigger false label mismatches.
+            target_eids = getattr(
+                self, f'{batch.split}_inds')[batch[task].input_id]
+            positions = ordered_edge_positions(
+                batch[task].e_id, target_eids)
 
-        if not mask.any():
+        if positions.numel() == 0:
             raise RuntimeError(
                 f'No supervision edges found in {batch.split} batch.')
 
@@ -55,11 +82,11 @@ class HeteroGNNEdgeHead(nn.Module):
 
         # A concatentation of source/target node embedding + edge attribute
         features = torch.cat(
-            (batch[task[0]].x[edge_index[0, mask]],
-             batch[task[2]].x[edge_index[1, mask]],
-             batch[task].edge_attr[mask]),
+            (batch[task[0]].x[edge_index[0, positions]],
+             batch[task[2]].x[edge_index[1, positions]],
+             batch[task].edge_attr[positions]),
             dim=-1)
-        labels = batch[task].y[mask]
+        labels = batch[task].y[positions]
         if hasattr(batch[task], 'edge_label') and \
                 labels.numel() == batch[task].edge_label.numel() and \
                 not torch.equal(

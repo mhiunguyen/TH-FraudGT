@@ -7,6 +7,7 @@ from torch_geometric.utils import mask_to_index
 
 from fraudGT.graphgym.config import cfg
 from fraudGT.graphgym.register import register_head
+from fraudGT.head.hetero_edge import ordered_edge_positions
 
 
 def _mlp(dim_in, dim_hidden, dim_out, num_layers, dropout):
@@ -90,18 +91,19 @@ class MultiViewHeteroEdgeHead(nn.Module):
         # Exposed for diagnostics/explainability after a forward pass.
         self.last_gate = None
 
-    def _target_mask(self, batch):
+    def _target_positions(self, batch):
         if hasattr(batch[self.task], 'target_edge_mask'):
             mask = batch[self.task].target_edge_mask
             expected = batch[self.task].edge_label.numel()
             if int(mask.sum()) != expected:
                 raise RuntimeError(
                     'Temporal target mask does not match edge supervision.')
-            return mask
+            return mask_to_index(mask)
         split_inds = getattr(self, f'{batch.split}_inds')
-        return torch.isin(
+        target_eids = split_inds[batch[self.task].input_id]
+        return ordered_edge_positions(
             batch[self.task].e_id,
-            split_inds[batch[self.task].input_id],
+            target_eids,
         )
 
     def forward(self, batch):
@@ -112,16 +114,16 @@ class MultiViewHeteroEdgeHead(nn.Module):
                 "gt.head='multiview_hetero_edge'."
             )
 
-        mask = self._target_mask(batch)
+        positions = self._target_positions(batch)
         edge_index = edge_store.edge_index
         src, _, dst = self.task
 
         graph_input = torch.cat([
-            batch[src].x[edge_index[0, mask]],
-            batch[dst].x[edge_index[1, mask]],
-            edge_store.edge_attr[mask],
+            batch[src].x[edge_index[0, positions]],
+            batch[dst].x[edge_index[1, positions]],
+            edge_store.edge_attr[positions],
         ], dim=-1)
-        transaction_input = edge_store.raw_edge_attr[mask]
+        transaction_input = edge_store.raw_edge_attr[positions]
 
         z_graph = self.graph_projector(graph_input)
         z_transaction = self.transaction_projector(transaction_input)
@@ -130,5 +132,9 @@ class MultiViewHeteroEdgeHead(nn.Module):
 
         self.last_gate = alpha.detach()
         prediction = self.classifier(z_fusion)
-        label = edge_store.y[mask]
+        label = edge_store.y[positions]
+        if hasattr(edge_store, 'edge_label') and not torch.equal(
+                label.view(-1), edge_store.edge_label.view(-1)):
+            raise RuntimeError(
+                'Multi-view labels do not match edge supervision labels.')
         return prediction, label
