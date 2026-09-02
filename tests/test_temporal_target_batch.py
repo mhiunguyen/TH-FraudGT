@@ -93,6 +93,19 @@ def test_target_already_in_history_is_rejected():
         transform(make_batch(existing_eid=1))
 
 
+def test_clean_noncausal_removes_then_appends_current_target():
+    source = make_source()
+    transform = PrepareTemporalLinkBatch(
+        source, TASK, target_edge_ids=torch.tensor([1]),
+        add_ego_id=False, enforce_strict_past=False)
+    batch = transform(make_batch(existing_eid=1))
+
+    assert batch[TASK].e_id.tolist() == [1]
+    assert batch[REVERSE].e_id.tolist() == [1]
+    assert batch[TASK].target_edge_mask.tolist() == [True]
+    assert batch[TASK].y.tolist() == [1]
+
+
 def test_earlier_target_can_be_history_of_later_component():
     source = make_source()
     transform = PrepareTemporalLinkBatch(

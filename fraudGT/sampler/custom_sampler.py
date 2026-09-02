@@ -790,7 +790,7 @@ class AddEgoIdsForLinkNeighbor(BaseTransform):
 
 
 class PrepareTemporalLinkBatch(BaseTransform):
-    """Attach the current supervision edge after strict-past sampling.
+    """Attach the current supervision edge after neighborhood sampling.
 
     ``LinkNeighborLoader`` exposes supervision edges through
     ``edge_label_index``.  Under temporal sampling, these edges are correctly
@@ -801,11 +801,12 @@ class PrepareTemporalLinkBatch(BaseTransform):
     """
 
     def __init__(self, data: HeteroData, task, target_edge_ids: Tensor,
-                 add_ego_id: bool):
+                 add_ego_id: bool, enforce_strict_past: bool = True):
         self.data = data
         self.task = task
         self.target_edge_ids = target_edge_ids
         self.add_ego_id = add_ego_id
+        self.enforce_strict_past = enforce_strict_past
 
     @staticmethod
     def _append(store, name: str, values: Tensor):
@@ -814,6 +815,17 @@ class PrepareTemporalLinkBatch(BaseTransform):
             setattr(store, name, values)
         else:
             setattr(store, name, torch.cat([current, values], dim=0))
+
+    @staticmethod
+    def _filter_history(store, keep: Tensor):
+        """Remove selected message-passing edges and aligned attributes."""
+        edge_count = store.edge_index.size(1)
+        store.edge_index = store.edge_index[:, keep]
+        for name in ('edge_attr', 'e_id', 'timestamps',
+                     'temporal_timestamps', 'y'):
+            value = getattr(store, name, None)
+            if isinstance(value, Tensor) and value.size(0) == edge_count:
+                setattr(store, name, value[keep])
 
     def forward(self, batch: HeteroData):
         task_store = batch[self.task]
@@ -854,7 +866,8 @@ class PrepareTemporalLinkBatch(BaseTransform):
             device=target_eids.device)
         target_eid_by_group[source_groups] = target_eids
 
-        if hasattr(task_store, 'e_id') and task_store.e_id.numel() > 0:
+        if self.enforce_strict_past and hasattr(task_store, 'e_id') \
+                and task_store.e_id.numel() > 0:
             history_groups = node_batch[task_store.edge_index[0]]
             own_target_in_history = task_store.e_id == \
                 target_eid_by_group[history_groups]
@@ -888,6 +901,21 @@ class PrepareTemporalLinkBatch(BaseTransform):
                 current_index = target_index.flip(0)
             else:
                 continue
+
+            # The clean non-causal control uses ordinary (future-permitting)
+            # neighborhood sampling, but the current supervision transaction
+            # must still be prediction-only. LinkNeighborLoader does not
+            # guarantee that seed edges are present in the sampled adjacency,
+            # so remove an occurrence when present and append exactly one
+            # explicit target below.
+            if not self.enforce_strict_past and hasattr(store, 'e_id') \
+                    and store.e_id.numel() > 0:
+                history_groups = \
+                    batch[edge_type[0]].batch[store.edge_index[0]]
+                own_target = store.e_id == \
+                    target_eid_by_group[history_groups]
+                if own_target.any():
+                    self._filter_history(store, ~own_target)
 
             store.edge_index = torch.cat(
                 [store.edge_index, current_index], dim=1)
@@ -927,6 +955,15 @@ class PrepareTemporalLinkBatch(BaseTransform):
 def get_LinkNeighborLoader(dataset, batch_size, shuffle=True, split='train'):
     return _get_link_neighbor_loader(
         dataset, batch_size, shuffle=shuffle, split=split, temporal=False)
+
+
+@register_sampler('clean_link_neighbor')
+def get_CleanLinkNeighborLoader(dataset, batch_size, shuffle=True,
+                                split='train'):
+    """Non-causal control with prediction targets appended explicitly."""
+    return _get_link_neighbor_loader(
+        dataset, batch_size, shuffle=shuffle, split=split, temporal=False,
+        clean_targets=True)
 
 
 def _strict_temporal_cutoff(timestamps: Tensor) -> Tensor:
@@ -978,7 +1015,8 @@ def _ensure_edge_timestamps(data: HeteroData, task):
 
 
 def _get_link_neighbor_loader(dataset, batch_size, shuffle=True,
-                              split='train', temporal=False):
+                              split='train', temporal=False,
+                              clean_targets=False):
     task = cfg.dataset.task_entity
     data = dataset[split]
     mask = data[task].split_mask
@@ -988,6 +1026,18 @@ def _get_link_neighbor_loader(dataset, batch_size, shuffle=True,
     temporal_kwargs = {}
     transform = AddEgoIdsForLinkNeighbor() \
         if cfg.train.add_ego_id else None
+    if clean_targets:
+        if not isinstance(data, HeteroData):
+            raise TypeError(
+                'clean_link_neighbor currently expects HeteroData.')
+        temporal_kwargs = {'disjoint': True}
+        transform = PrepareTemporalLinkBatch(
+            data=data,
+            task=task,
+            target_edge_ids=mask_to_index(mask),
+            add_ego_id=cfg.train.add_ego_id,
+            enforce_strict_past=False,
+        )
     if temporal:
         if not isinstance(data, HeteroData):
             raise TypeError(
@@ -1016,6 +1066,7 @@ def _get_link_neighbor_loader(dataset, batch_size, shuffle=True,
             task=task,
             target_edge_ids=mask_to_index(mask),
             add_ego_id=cfg.train.add_ego_id,
+            enforce_strict_past=True,
         )
 
     loader_train = \
