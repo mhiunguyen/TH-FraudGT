@@ -40,6 +40,20 @@ def check_grad(model):
         #     elif torch.isinf(param.grad).any():
         #         print(f'{name} has Inf gradients')
 
+
+def _validate_supervision(pred, true, loss, split):
+    """Fail fast instead of silently training on empty/NaN supervision."""
+    if true.numel() == 0 or pred.shape[0] == 0:
+        raise RuntimeError(f'{split} batch contains no supervision targets.')
+    if pred.shape[0] != true.shape[0]:
+        raise RuntimeError(
+            f'{split} prediction/label mismatch: '
+            f'{pred.shape[0]} predictions vs {true.shape[0]} labels.')
+    if not torch.isfinite(pred).all():
+        raise FloatingPointError(f'{split} predictions contain NaN/Inf.')
+    if not torch.isfinite(loss):
+        raise FloatingPointError(f'{split} loss is NaN/Inf.')
+
 # def train_epoch(logger, loader, model, optimizer, scheduler, batch_accumulation):
 #     model.train()
 #     optimizer.zero_grad()
@@ -147,6 +161,7 @@ def train_epoch(cur_epoch, logger, loader, model, optimizer, scheduler, batch_ac
                 loss, pred_score = compute_loss(pred, true, cur_epoch)
             else:
                 loss, pred_score = compute_loss(pred, true)
+            _validate_supervision(pred, true, loss, 'train')
             _true = true.detach().to('cpu', non_blocking=True)
             _pred = pred_score.detach().to('cpu', non_blocking=True)
             runtime_stats_cuda.end_region("loss")
@@ -215,6 +230,7 @@ def eval_epoch(logger, loader, model, split='val'):
                 extra_stats = {}
 
             loss, pred_score = compute_loss(pred, true)
+            _validate_supervision(pred, true, loss, split)
             _true = true.detach().to('cpu', non_blocking=True)
             _pred = pred_score.detach().to('cpu', non_blocking=True)
             

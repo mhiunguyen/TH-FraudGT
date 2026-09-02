@@ -31,20 +31,42 @@ class HeteroGNNEdgeHead(nn.Module):
 
     def _apply_index(self, batch):
         task = cfg.dataset.task_entity
-        # There could be multi-edge between node pair, using edge id is the safest way
-        # mask = torch.isin(getattr(self, f'{batch.split}_edge_inds')[batch[task].e_id], 
-        #                   getattr(self, f'{batch.split}_inds')[batch[task].input_id])
-        mask = torch.isin(batch[task].e_id, 
-                          getattr(self, f'{batch.split}_inds')[batch[task].input_id])
+        if hasattr(batch[task], 'target_edge_mask'):
+            mask = batch[task].target_edge_mask
+            expected = batch[task].edge_label.numel()
+            actual = int(mask.sum())
+            if actual != expected:
+                raise RuntimeError(
+                    'Temporal target mask mismatch: '
+                    f'expected {expected} targets, found {actual}.')
+        else:
+            # There can be parallel edges between one node pair, so edge IDs
+            # are the safest key for the original non-temporal loader.
+            mask = torch.isin(
+                batch[task].e_id,
+                getattr(self, f'{batch.split}_inds')[batch[task].input_id])
+
+        if not mask.any():
+            raise RuntimeError(
+                f'No supervision edges found in {batch.split} batch.')
 
         task = cfg.dataset.task_entity
         edge_index = batch[task].edge_index
 
         # A concatentation of source/target node embedding + edge attribute
-        return torch.cat((batch[task[0]].x[edge_index[0, mask]], 
-                          batch[task[2]].x[edge_index[1, mask]], 
-                          batch[task].edge_attr[mask]), dim=-1), \
-               batch[task].y[mask]
+        features = torch.cat(
+            (batch[task[0]].x[edge_index[0, mask]],
+             batch[task[2]].x[edge_index[1, mask]],
+             batch[task].edge_attr[mask]),
+            dim=-1)
+        labels = batch[task].y[mask]
+        if hasattr(batch[task], 'edge_label') and \
+                labels.numel() == batch[task].edge_label.numel() and \
+                not torch.equal(
+                    labels.view(-1), batch[task].edge_label.view(-1)):
+            raise RuntimeError(
+                'Prediction-head labels do not match edge supervision labels.')
+        return features, labels
     
 
     def forward(self, batch):

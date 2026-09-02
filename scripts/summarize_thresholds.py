@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import math
 import re
 from pathlib import Path
 
@@ -39,6 +40,18 @@ def main():
             continue
 
         val_records = read_json_lines(val_path)
+        test_records = read_json_lines(test_path)
+        invalid = [
+            (split, record.get('epoch'))
+            for split, records in [('val', val_records),
+                                   ('test', test_records)]
+            for record in records
+            if not math.isfinite(float(record.get('loss', float('nan'))))
+        ]
+        if invalid:
+            raise RuntimeError(
+                f'Invalid NaN/Inf evaluation records in {seed_dir}: '
+                f'{invalid}. Refusing to summarize a failed run.')
         candidates = []
         if args.fixed_threshold is not None:
             threshold_percent = int(round(args.fixed_threshold * 100))
@@ -71,7 +84,7 @@ def main():
             candidates, key=lambda item: (item[0], item[1]))
         epoch = val_record['epoch']
         test_record = next(
-            (record for record in read_json_lines(test_path)
+            (record for record in test_records
              if record['epoch'] == epoch), None)
         if test_record is None:
             raise RuntimeError(f'No test record for epoch {epoch} in {test_path}')

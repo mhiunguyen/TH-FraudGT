@@ -91,6 +91,13 @@ class MultiViewHeteroEdgeHead(nn.Module):
         self.last_gate = None
 
     def _target_mask(self, batch):
+        if hasattr(batch[self.task], 'target_edge_mask'):
+            mask = batch[self.task].target_edge_mask
+            expected = batch[self.task].edge_label.numel()
+            if int(mask.sum()) != expected:
+                raise RuntimeError(
+                    'Temporal target mask does not match edge supervision.')
+            return mask
         split_inds = getattr(self, f'{batch.split}_inds')
         return torch.isin(
             batch[self.task].e_id,

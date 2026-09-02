@@ -789,6 +789,103 @@ class AddEgoIdsForLinkNeighbor(BaseTransform):
         return data
 
 
+class PrepareTemporalLinkBatch(BaseTransform):
+    """Attach the current supervision edge after strict-past sampling.
+
+    ``LinkNeighborLoader`` exposes supervision edges through
+    ``edge_label_index``.  Under temporal sampling, these edges are correctly
+    absent from the sampled history.  FraudGT's edge head, however, expects the
+    current transaction to have an edge embedding.  We therefore append only
+    the current target transaction after sampling and mark it explicitly.  It
+    is not eligible to be sampled as historical context.
+    """
+
+    def __init__(self, data: HeteroData, task, target_edge_ids: Tensor,
+                 add_ego_id: bool):
+        self.data = data
+        self.task = task
+        self.target_edge_ids = target_edge_ids
+        self.add_ego_id = add_ego_id
+
+    @staticmethod
+    def _append(store, name: str, values: Tensor):
+        current = getattr(store, name, None)
+        if current is None:
+            setattr(store, name, values)
+        else:
+            setattr(store, name, torch.cat([current, values], dim=0))
+
+    def forward(self, batch: HeteroData):
+        task_store = batch[self.task]
+        input_id = task_store.input_id.to(self.target_edge_ids.device)
+        target_eids = self.target_edge_ids[input_id]
+        target_index = task_store.edge_label_index
+        target_labels = task_store.edge_label
+
+        if target_eids.numel() == 0:
+            raise RuntimeError('Temporal batch contains no target edges.')
+        if target_index.size(1) != target_eids.numel():
+            raise RuntimeError(
+                'Temporal supervision mismatch: edge_label_index has '
+                f'{target_index.size(1)} edges but input_id maps to '
+                f'{target_eids.numel()} targets.')
+        if target_labels.numel() != target_eids.numel():
+            raise RuntimeError(
+                'Temporal supervision mismatch: edge_label and input_id have '
+                'different lengths.')
+
+        # Strict-past sampling must not already contain the current edge.
+        if hasattr(task_store, 'e_id') and \
+                torch.isin(task_store.e_id, target_eids).any():
+            raise RuntimeError(
+                'Temporal leakage: a current target edge is already present '
+                'in the strict-past sampled history.')
+
+        for edge_type in batch.edge_types:
+            store = batch[edge_type]
+            source = self.data[edge_type]
+            if edge_type == self.task:
+                current_index = target_index
+            elif edge_type == (
+                    self.task[2], f'rev_{self.task[1]}', self.task[0]):
+                current_index = target_index.flip(0)
+            else:
+                continue
+
+            store.edge_index = torch.cat(
+                [store.edge_index, current_index], dim=1)
+            self._append(store, 'edge_attr', source.edge_attr[target_eids])
+            self._append(store, 'e_id', target_eids)
+            if hasattr(source, 'timestamps'):
+                self._append(
+                    store, 'timestamps', source.timestamps[target_eids])
+            if hasattr(source, 'temporal_timestamps'):
+                self._append(
+                    store, 'temporal_timestamps',
+                    source.temporal_timestamps[target_eids])
+            if hasattr(source, 'y'):
+                self._append(store, 'y', source.y[target_eids])
+
+        target_count = target_eids.numel()
+        target_mask = torch.zeros(
+            batch[self.task].edge_index.size(1), dtype=torch.bool,
+            device=batch[self.task].edge_index.device)
+        target_mask[-target_count:] = True
+        batch[self.task].target_edge_mask = target_mask
+        batch[self.task].target_e_id = target_eids
+
+        # Cross-check the source label before the model sees the batch.
+        appended_labels = batch[self.task].y[target_mask]
+        if not torch.equal(
+                appended_labels.view(-1), target_labels.view(-1)):
+            raise RuntimeError(
+                'Temporal supervision labels do not match source edge labels.')
+
+        if self.add_ego_id:
+            batch = AddEgoIdsForLinkNeighbor()(batch)
+        return batch
+
+
 @register_sampler('link_neighbor')
 def get_LinkNeighborLoader(dataset, batch_size, shuffle=True, split='train'):
     return _get_link_neighbor_loader(
@@ -852,6 +949,8 @@ def _get_link_neighbor_loader(dataset, batch_size, shuffle=True,
     edge_label = data[task].y[mask]
 
     temporal_kwargs = {}
+    transform = AddEgoIdsForLinkNeighbor() \
+        if cfg.train.add_ego_id else None
     if temporal:
         if not isinstance(data, HeteroData):
             raise TypeError(
@@ -875,6 +974,12 @@ def _get_link_neighbor_loader(dataset, batch_size, shuffle=True,
             # edge retains its own cutoff time.
             'disjoint': True,
         }
+        transform = PrepareTemporalLinkBatch(
+            data=data,
+            task=task,
+            target_edge_ids=mask_to_index(mask),
+            add_ego_id=cfg.train.add_ego_id,
+        )
 
     loader_train = \
         LoaderWrapper( \
@@ -890,7 +995,7 @@ def _get_link_neighbor_loader(dataset, batch_size, shuffle=True,
                     cfg.train.persistent_workers and cfg.num_workers > 0),
                 pin_memory=cfg.train.pin_memory,
                 shuffle=shuffle,
-                transform=AddEgoIdsForLinkNeighbor() if cfg.train.add_ego_id else None,
+                transform=transform,
                 **temporal_kwargs,
             ),
             getattr(cfg, 'val' if split == 'test' else split).iter_per_epoch,
