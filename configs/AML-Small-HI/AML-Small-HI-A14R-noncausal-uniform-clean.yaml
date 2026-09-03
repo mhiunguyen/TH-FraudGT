@@ -1,0 +1,87 @@
+out_dir: /kaggle/working/TH-FraudGT/results_nb14r_uniform
+metric_best: f1
+seed: 42
+wandb:
+  use: false
+  project: MV-FraudGT
+dataset:
+  dir: /kaggle/working/TH-FraudGT/data
+  format: AML
+  name: Small-HI
+  reverse_mp: true
+  add_ports: true
+  task: hetero_edge
+  task_type: classification
+  task_entity: ('node', 'to', 'node')
+  transductive: true
+  node_encoder: true
+  node_encoder_name: Hetero_Raw
+  node_encoder_bn: false
+  edge_encoder: true
+  edge_encoder_name: Hetero_Raw
+  edge_encoder_bn: false
+  add_history: false
+num_threads: 2
+num_workers: 2
+train:
+  mode: custom
+  sampler: clean_link_neighbor
+  neighbor_sizes: [25, 25]
+  add_ego_id: true
+  iter_per_epoch: 256
+  batch_size: 256
+  eval_period: 25
+  ckpt_period: 100
+  tqdm: true
+  persistent_workers: false
+  pin_memory: true
+  enable_ckpt: true
+  ckpt_best: true
+  auto_resume: true
+  ckpt_resume_period: 25
+val:
+  sampler: clean_link_neighbor
+  iter_per_epoch: -1
+  tqdm: true
+model:
+  type: GTModel
+  loss_fun: weighted_cross_entropy
+  loss_fun_weight: [1, 6]
+  thresh: 0.10
+  edge_decoding: dot
+  graph_pooling: mean
+gt:
+  head: hetero_edge
+  layer_type: SparseNodeTransformer
+  layers_pre_gt: 0
+  layers: 2
+  layers_post_gt: 2
+  attn_heads: 8
+  dim_hidden: 64
+  input_dropout: 0.0
+  dropout: 0.2
+  attn_dropout: 0.3
+  batch_norm: false
+  layer_norm: true
+  l2_norm: false
+  act: gelu
+  attn_mask: Edge
+  residual: Fixed
+  ffn: Type
+  jumping_knowledge: false
+gnn:
+  dropout: 0.2
+mvia:
+  thresholds: [0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50,
+               0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90, 0.95]
+optim:
+  batch_accumulation: 8
+  clip_grad_norm: true
+  optimizer: adamW
+  weight_decay: 1.0e-5
+  base_lr: 0.001
+  max_epoch: 200
+  scheduler: cosine_with_warmup
+  num_warmup_epochs: 10
+gpu_mem: true
+tensorboard_agg: false
