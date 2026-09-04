@@ -272,8 +272,14 @@ best_epoch = int(selection.loc[0, 'best_epoch'])
 threshold = float(selection.loc[0, 'threshold'])
 checkpoint = RUN_DIR / 'ckpt' / f'{best_epoch}.ckpt'
 assert checkpoint.exists(), f'Missing selected checkpoint: {checkpoint}'
+SAFE_CHECKPOINT = Path('/kaggle/working/NB15_selected_seed42.ckpt')
+SAFE_CONFIG = Path('/kaggle/working/AML-Small-HI-A15-causal-uniform-history-audit.yaml')
+copy2(checkpoint, SAFE_CHECKPOINT)
+copy2(CFG, SAFE_CONFIG)
+assert SAFE_CHECKPOINT.exists() and SAFE_CHECKPOINT.stat().st_size > 0
 display(selection)
 print('Validation selected epoch:', best_epoch, '| threshold:', threshold)
+print('Checkpoint backup saved before audit:', SAFE_CHECKPOINT)
 '''),
     markdown('## 7. Xuất prediction và audit history/coverage trên validation'),
     code(r'''
@@ -329,7 +335,10 @@ print('- Đây là liên hệ thống kê, chưa phải bằng chứng nhân qu�
     code(r'''
 import shutil
 
-evidence = [CFG, LOG, AUDIT_LOG, SUMMARY, DETAIL, BY_HISTORY, BY_COVERAGE, GLOBAL, FIGURE]
+evidence = [
+    CFG, SAFE_CHECKPOINT, SAFE_CONFIG, LOG, AUDIT_LOG, SUMMARY,
+    DETAIL, BY_HISTORY, BY_COVERAGE, GLOBAL, FIGURE,
+]
 bundle = Path('/kaggle/working/NB15_prediction_history_audit_seed42_artifacts')
 bundle.mkdir(exist_ok=True)
 for path in evidence:
