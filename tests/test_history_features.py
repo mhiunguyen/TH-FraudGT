@@ -58,6 +58,24 @@ def test_history_ablation_groups_use_canonical_non_overlapping_columns():
     assert history_feature_names(['frequency']) == HISTORY_FEATURE_NAMES[4:7]
 
 
+def test_endpoint_behavior_preset_excludes_recency_and_pair_frequency():
+    assert resolve_history_feature_indices(['endpoint_behavior']) == (4, 5, 7)
+    assert history_feature_names(['endpoint_behavior']) == (
+        'hist_log_prior_out_count',
+        'hist_log_prior_in_count',
+        'hist_log_amount_over_prior_out_mean',
+    )
+
+
+def test_endpoint_behavior_preset_cannot_be_mixed_with_ablation_groups():
+    try:
+        resolve_history_feature_indices(['endpoint_behavior', 'recency'])
+    except ValueError:
+        pass
+    else:
+        raise AssertionError('Expected mixed preset/group selection to fail')
+
+
 def test_unknown_or_ambiguous_history_groups_are_rejected():
     for groups in (['unknown'], ['all', 'recency']):
         try:

@@ -33,6 +33,15 @@ HISTORY_FEATURE_GROUPS = {
     "monetary": (7,),
 }
 
+# A hypothesis-driven preset for the causal history experiment.  Notebook 15
+# found that high-activity endpoint history is heavily truncated while direct
+# pair history is almost completely retained.  This preset therefore exposes
+# only endpoint activity and amount deviation, excluding recency and pair
+# frequency rather than adding all eight historical features.
+HISTORY_FEATURE_PRESETS = {
+    "endpoint_behavior": (4, 5, 7),
+}
+
 # Binary indicators stay in {0, 1}; the other columns are standardized.
 CONTINUOUS_HISTORY_COLUMNS = (0, 1, 4, 5, 6, 7)
 
@@ -68,9 +77,16 @@ def resolve_history_feature_indices(
         return tuple(range(len(HISTORY_FEATURE_NAMES)))
     if "all" in normalized:
         raise ValueError("history group 'all' cannot be combined with other groups")
+    preset_names = normalized.intersection(HISTORY_FEATURE_PRESETS)
+    if preset_names:
+        if len(normalized) != 1:
+            raise ValueError(
+                "history feature presets cannot be combined with other groups"
+            )
+        return HISTORY_FEATURE_PRESETS[next(iter(preset_names))]
     unknown = normalized.difference(HISTORY_FEATURE_GROUPS)
     if unknown:
-        valid = ", ".join(HISTORY_FEATURE_GROUPS)
+        valid = ", ".join((*HISTORY_FEATURE_GROUPS, *HISTORY_FEATURE_PRESETS))
         raise ValueError(
             f"Unknown history feature groups: {sorted(unknown)}; valid: {valid}"
         )

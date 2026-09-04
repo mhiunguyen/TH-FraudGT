@@ -29,7 +29,9 @@ def dataset_cfg(cfg):
     cfg.dataset.add_history = False
 
     # Select an ablation subset from recency, frequency, and monetary.  The
-    # default preserves the original H-FraudGT behavior with all 8 features.
+    # endpoint_behavior preset selects source outgoing count, destination
+    # incoming count, and source amount deviation.  The default preserves the
+    # original H-FraudGT behavior with all 8 features.
     cfg.dataset.history_groups = ['recency', 'frequency', 'monetary']
 
     # Optional reliability shrinkage for H-FraudGT. Continuous historical
